@@ -1,0 +1,326 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mi cuestionario de estudio</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: Arial, sans-serif;
+    background: #f3f5f9; color: #202938;
+  }
+  header {
+    background: #183b65; color: white;
+    padding: 22px 16px; text-align: center;
+  }
+  header h1 { margin: 0 0 8px; font-size: 24px; }
+  header p { margin: 0; }
+  main {
+    max-width: 760px; margin: 24px auto; padding: 0 14px;
+  }
+  .card {
+    background: white; padding: 22px; border-radius: 14px;
+    box-shadow: 0 3px 12px #0000000c; margin-bottom: 16px;
+  }
+  button, .file-label {
+    display: inline-block; border: 0; border-radius: 9px;
+    padding: 12px 16px; font-size: 16px; cursor: pointer;
+    background: #1b568e; color: white; margin: 5px 4px 5px 0;
+  }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .secondary { background: #e7edf5; color: #20344b; }
+  .danger { background: #9f3030; }
+  input[type=file] { max-width: 100%; margin: 12px 0; }
+  .muted { color: #64748b; font-size: 14px; line-height: 1.5; }
+  .hidden { display: none !important; }
+  .progress {
+    height: 8px; background: #e4eaf1; border-radius: 8px;
+    overflow: hidden; margin: 12px 0 20px;
+  }
+  #progressBar { height: 100%; width: 0; background: #26805d; }
+  #questionText { font-size: 20px; line-height: 1.5; white-space: pre-wrap; }
+  .option {
+    display: flex; gap: 12px; align-items: flex-start;
+    padding: 14px; margin: 10px 0; border: 1px solid #d6deea;
+    border-radius: 10px; cursor: pointer; line-height: 1.45;
+  }
+  .option:has(input:checked) {
+    border-color: #1b568e; background: #edf5ff;
+  }
+  .option input { margin-top: 4px; transform: scale(1.15); }
+  .nav { display: flex; justify-content: space-between; flex-wrap: wrap; }
+  .stat { font-size: 18px; margin: 8px 0; }
+  .review-item { border-top: 1px solid #e1e6ed; padding: 14px 0; }
+  .review-item p { line-height: 1.5; white-space: pre-wrap; }
+  .tag { font-weight: bold; }
+  .good { color: #187448; }
+  .bad { color: #a62c2c; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mi cuestionario de estudio</h1>
+  <p>Responde a tu ritmo y consulta tu resultado al terminar.</p>
+</header>
+
+<main>
+  <section class="card" id="setup">
+    <h2>Preparar cuestionario</h2>
+    <p>Primero, carga un archivo JSON con las preguntas y sus respuestas.</p>
+    <label for="fileInput"><strong>Seleccionar banco de preguntas</strong></label><br>
+    <input id="fileInput" type="file" accept=".json,application/json">
+    <p id="loadStatus" class="muted">
+      Aún no has cargado preguntas. Consulta el formato JSON que aparece debajo.
+    </p>
+    <p><strong>Preguntas cargadas:</strong> <span id="questionCount">0</span></p>
+    <button id="startBtn" disabled>Comenzar cuestionario</button>
+    <details>
+      <summary>Ver formato del archivo JSON</summary>
+      <p class="muted">El archivo debe tener esta estructura. Cambia el ejemplo por tus preguntas reales.</p>
+      <pre style="white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f5f9;padding:12px;border-radius:8px;">{
+  "questions": [
+    {
+      "question": "Escribe aquí la pregunta",
+      "options": [
+        {"label": "A", "text": "Primera opción"},
+        {"label": "B", "text": "Segunda opción"}
+      ],
+      "correct": "B"
+    },
+    {
+      "question": "Pregunta con una sola opción",
+      "options": [
+        {"label": "A", "text": "Única opción del documento"}
+      ]
+    }
+  ]
+}</pre>
+      <p class="muted">
+        El campo "correct" es opcional. Si se conoce la respuesta correcta, escribe
+        su letra, por ejemplo "B". Si no aparece en el documento, omite ese campo.
+        Las opciones deben conservar el texto original del PDF.
+      </p>
+    </details>
+  </section>
+
+  <section class="card hidden" id="quiz">
+    <div class="muted" id="counter"></div>
+    <div class="progress"><div id="progressBar"></div></div>
+    <h2 id="questionText"></h2>
+    <div id="options"></div>
+    <p class="muted">No se mostrarán resultados hasta que termines.</p>
+    <div class="nav">
+      <button class="secondary" id="prevBtn">Anterior</button>
+      <button id="nextBtn">Siguiente</button>
+      <button class="danger hidden" id="finishBtn">Finalizar</button>
+    </div>
+  </section>
+
+  <section class="card hidden" id="results">
+    <h2>Resultado final</h2>
+    <p class="stat" id="score"></p>
+    <p id="scoreDetail"></p>
+    <button id="reviewBtn">Revisar respuestas</button>
+    <button class="secondary" id="retryBtn">Volver a intentarlo</button>
+    <div id="review" class="hidden"></div>
+    <button class="secondary" id="homeBtn">Volver al inicio</button>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+let questions = [];
+let answers = [];
+let current = 0;
+let finished = false;
+
+const $ = id => document.getElementById(id);
+
+$("fileInput").addEventListener("change", async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  try {
+    const data = JSON.parse(await file.text());
+    if (!data || !Array.isArray(data.questions) || !data.questions.length) {
+      throw new Error('El archivo debe contener una lista "questions" con preguntas.');
+    }
+
+    data.questions.forEach((q, i) => {
+      if (typeof q.question !== "string" ||
+          !Array.isArray(q.options) || q.options.length === 0) {
+        throw new Error("Revisa la pregunta " + (i + 1) + ": falta el texto o las opciones.");
+      }
+      q.options.forEach((o, j) => {
+        if (typeof o.label !== "string" || typeof o.text !== "string") {
+          throw new Error("Revisa la opción " + (j + 1) + " de la pregunta " + (i + 1) + ".");
+        }
+      });
+      if (q.correct !== undefined &&
+          !q.options.some(o => o.label === q.correct)) {
+        throw new Error("La respuesta correcta de la pregunta " + (i + 1) +
+          " no coincide con ninguna letra de sus opciones.");
+      }
+    });
+
+    questions = data.questions;
+    answers = Array(questions.length).fill(null);
+    $("questionCount").textContent = questions.length;
+    $("loadStatus").textContent = "Archivo cargado correctamente: " + file.name;
+    $("startBtn").disabled = false;
+  } catch (error) {
+    questions = [];
+    answers = [];
+    $("questionCount").textContent = "0";
+    $("startBtn").disabled = true;
+    $("loadStatus").textContent = "No se pudo cargar el archivo: " + error.message;
+  }
+});
+
+$("startBtn").addEventListener("click", () => {
+  current = 0;
+  finished = false;
+  $("setup").classList.add("hidden");
+  $("results").classList.add("hidden");
+  $("quiz").classList.remove("hidden");
+  showQuestion();
+});
+
+function showQuestion() {
+  const q = questions[current];
+  $("counter").textContent = "Pregunta " + (current + 1) + " de " + questions.length;
+  $("progressBar").style.width = ((current + 1) / questions.length * 100) + "%";
+  $("questionText").textContent = q.question;
+  $("options").replaceChildren();
+
+  q.options.forEach(option => {
+    const label = document.createElement("label");
+    label.className = "option";
+
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "answer";
+    radio.value = option.label;
+    radio.checked = answers[current] === option.label;
+    radio.addEventListener("change", () => {
+      answers[current] = option.label;
+    });
+
+    const text = document.createElement("span");
+    text.textContent = option.label + ". " + option.text;
+
+    label.append(radio, text);
+    $("options").appendChild(label);
+  });
+
+  $("prevBtn").disabled = current === 0;
+  const last = current === questions.length - 1;
+  $("nextBtn").classList.toggle("hidden", last);
+  $("finishBtn").classList.toggle("hidden", !last);
+}
+
+$("prevBtn").addEventListener("click", () => {
+  if (current > 0) { current--; showQuestion(); }
+});
+$("nextBtn").addEventListener("click", () => {
+  if (current < questions.length - 1) { current++; showQuestion(); }
+});
+$("finishBtn").addEventListener("click", () => {
+  if (finished) return;
+  finished = true;
+  showResults();
+});
+
+function showResults() {
+  $("quiz").classList.add("hidden");
+  $("results").classList.remove("hidden");
+  $("review").classList.add("hidden");
+  $("reviewBtn").textContent = "Revisar respuestas";
+
+  let graded = 0, correct = 0, wrong = 0, unanswered = 0;
+  questions.forEach((q, i) => {
+    if (answers[i] === null) unanswered++;
+    if (q.correct !== undefined) {
+      graded++;
+      if (answers[i] === q.correct) correct++;
+      else if (answers[i] !== null) wrong++;
+    }
+  });
+
+  $("score").textContent = graded
+    ? "Puntuación: " + correct + " de " + graded +
+      " (" + Math.round(correct / graded * 100) + "%)"
+    : "No hay respuestas correctas definidas para calificar.";
+
+  $("scoreDetail").textContent =
+    "Preguntas calificables: " + graded +
+    ". Correctas: " + correct +
+    ". Incorrectas: " + wrong +
+    ". Sin responder: " + unanswered +
+    ". Sin clave de respuesta: " +
+    questions.filter(q => q.correct === undefined).length + ".";
+}
+
+$("reviewBtn").addEventListener("click", () => {
+  const review = $("review");
+  if (!review.classList.contains("hidden")) {
+    review.classList.add("hidden");
+    $("reviewBtn").textContent = "Revisar respuestas";
+    return;
+  }
+
+  review.replaceChildren();
+  questions.forEach((q, i) => {
+    const item = document.createElement("div");
+    item.className = "review-item";
+
+    const heading = document.createElement("strong");
+    heading.textContent = "Pregunta " + (i + 1) + ": " + q.question;
+    item.appendChild(heading);
+
+    const chosen = q.options.find(o => o.label === answers[i]);
+    const p = document.createElement("p");
+    p.textContent = "Tu respuesta: " +
+      (chosen ? chosen.label + ". " + chosen.text : "Sin responder");
+    item.appendChild(p);
+
+    const result = document.createElement("p");
+    if (q.correct === undefined) {
+      result.textContent = "Esta pregunta no tiene una respuesta correcta indicada en el archivo.";
+      result.className = "muted";
+    } else if (answers[i] === q.correct) {
+      result.textContent = "Correcta";
+      result.className = "good tag";
+    } else {
+      const right = q.options.find(o => o.label === q.correct);
+      result.textContent = "Incorrecta. Respuesta registrada: " +
+        (right ? right.label + ". " + right.text : q.correct);
+      result.className = "bad tag";
+    }
+    item.appendChild(result);
+    review.appendChild(item);
+  });
+
+  review.classList.remove("hidden");
+  $("reviewBtn").textContent = "Ocultar revisión";
+});
+
+$("retryBtn").addEventListener("click", () => {
+  answers = Array(questions.length).fill(null);
+  current = 0;
+  finished = false;
+  $("results").classList.add("hidden");
+  $("quiz").classList.remove("hidden");
+  showQuestion();
+});
+
+$("homeBtn").addEventListener("click", () => {
+  $("results").classList.add("hidden");
+  $("setup").classList.remove("hidden");
+});
+</script>
+</body>
+</html>
